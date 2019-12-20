@@ -11,13 +11,14 @@
 using namespace std;
 
 thread_local mt19937 rng(0);
+#define NTHREADS 2
 
 double aleatorio(double a, double b){
     return uniform_real_distribution<double>{a, b}(rng);
 }
 
 double funct(double* a){
-    return pow(a[0],6);
+    return log(1.0+a[0]);
 }
 
 void EstimateBounds(int ndim, double (*f)(double*), double* bounds){
@@ -30,34 +31,30 @@ void EstimateBounds(int ndim, double (*f)(double*), double* bounds){
     }
 }
 
-void Integrate(double (*f)(double*), int ndim, double* integral, int verbose, int seed){
+void Integrate(double (*f)(double*), int ndim, double* integral, 
+               int batchsize, int maxeval, int verbose, int seed){
     
-    int nbatch = 5000000;
-    const int maxeval = 25*nbatch;
     double x[ndim];
     rng.seed(seed);
     
     
     
     /// Algorithm to estimate the maxima and minima ///
-    /// Plug and Play ///
     for(int j=0;j<ndim;j++) x[j] = 0.5;
     double bounds[2] = {f(x),f(x)};
     EstimateBounds(ndim,f,bounds);
     
     /// Integral initialization ///
-    int niter = int(maxeval/nbatch);
+    int niter = int(maxeval/batchsize);
     
     
     for(int k=1;k<=niter;k++)
     {
-        
-        
         double loc_min = bounds[0];
         double loc_max = bounds[1];
         
         int count = 0;
-        for (int i=1; i<=nbatch; i++)
+        for (int i=1; i<=batchsize; i++)
         {
             for(int j=0;j<ndim;j++) x[j] = aleatorio(0,1);
             double fx = f(x);
@@ -69,32 +66,40 @@ void Integrate(double (*f)(double*), int ndim, double* integral, int verbose, in
 
         }
         
-        double delta = (bounds[1]-bounds[0])*double(count)/nbatch;
+        double delta;
+        if (bounds[0]*bounds[1] > 0){
+             delta = bounds[0]+((bounds[1]-bounds[0])*double(count)/batchsize);}
+        else delta = ((bounds[1]-bounds[0])*double(count)/batchsize);
+        
         integral[0]  += delta;
         integral[1] += pow(delta,2);
         bounds[0] = loc_min;
         bounds[1] = loc_max;
         
         if(verbose>0){
-        cout << "Iteration["<<k<<"]: " << k*nbatch;
+        cout << "Iteration["<<k<<"]: " << k*batchsize;
         cout << " integrand evaluations so far" <<endl;
         if(verbose>1){
             cout << "The bounds for this iteration were = ["<<bounds[0]<<","<<bounds[1]<<"]"<<endl;}
         cout << "Integral = ";
         cout << integral[0]/k << " +- "; 
-        cout << sqrt((integral[1]/k - pow(integral[0]/k,2)))/(k) << endl;
+        cout << sqrt((integral[1]/k - pow(integral[0]/k,2))/k) << endl;
         cout << endl;
+            
         }
         
     }
+        
     integral[0] /= niter;
-    integral[1] = sqrt((integral[1]/niter - pow(integral[0],2)))/niter;
+    integral[1] = sqrt((integral[1]/niter - pow(integral[0],2))/niter);
     
 }
 
 struct IntegratorArguments{
 
     double (*Integrand)(double*);
+    int SizeofBatches;
+    int IntegrandEvaluations;
     int NumberOfVariables;
     double* Integral;
     int VerboseLevel;
@@ -103,27 +108,95 @@ struct IntegratorArguments{
 };
 
 void LayeredIntegrate(IntegratorArguments IA){
-    Integrate(IA.Integrand,IA.NumberOfVariables,IA.Integral,IA.VerboseLevel,IA.Seed);
+    Integrate(IA.Integrand,IA.NumberOfVariables,IA.Integral,
+              IA.SizeofBatches,IA.IntegrandEvaluations,IA.VerboseLevel,IA.Seed);
 }
 
-void * ThreadIntegrate(void * IntArgs){
+void* ThreadIntegrate(void * IntArgs){
     IntegratorArguments *IA = (IntegratorArguments*)IntArgs;
     LayeredIntegrate(*IA);
     return NULL;
-    pthread_exit(NULL);
+}
+
+
+void MultithreadIntegrate(IntegratorArguments IA){
+    
+    //////////////////////////////////////////////////////////////////////////
+    ///
+    ///   We will have (for now) hard coded batch sizes of 10.000 integrand 
+    ///   evaluatios, each core will run 100 batches then a master thread 
+    ///   will compile and show the accumulated results for the 100xNTHREADS
+    ///   observations so far.
+    ///
+    //////////////////////////////////////////////////////////////////////////
+    
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    
+    pthread_t threads[NTHREADS];
+    double integral_value[NTHREADS][2];
+    IntegratorArguments IntArgs[NTHREADS];
+    int rc[NTHREADS];
+    
+    int ver = IA.VerboseLevel;
+    
+    for(int i=0;i<NTHREADS;i++){
+        IntArgs[i].Integrand = IA.Integrand;
+        IntArgs[i].NumberOfVariables = IA.NumberOfVariables;
+        IntArgs[i].SizeofBatches = 10000;
+        IntArgs[i].IntegrandEvaluations = 100*IntArgs[i].SizeofBatches;
+        IntArgs[i].VerboseLevel = 0;
+        IntArgs[i].Seed = i;
+        IntArgs[i].Integral = integral_value[i];
+        CPU_SET(i, &cpuset);
+    }
+    
+    int NIter = IA.IntegrandEvaluations/(NTHREADS*100);
+    
+    for(int j=0;j<NIter;j++){
+        for(int i=0;i<NTHREADS;i++){
+            integral_value[i][0]=0;
+            integral_value[i][1]=0;
+            if (ver)cout << "Now Attempting to create thread "<<i<<endl;
+            rc[i] = pthread_create(&threads[i], NULL, ThreadIntegrate,&IntArgs[i]);
+            if (rc[i]) {
+                cout << "Error:unable to create thread," << rc[i] << endl;
+                exit(-1);
+            }
+            else if(ver) cout << "Thread "<<i<<" has been succesfuly created" << endl;
+            
+            int set_result = pthread_setaffinity_np(threads[i], sizeof(cpu_set_t), &cpuset);
+            if(set_result) cout << "Error: Thread "<<i<<" could not be commited to a new core"<<endl;
+            else if (ver) cout << "Thread reassignment succesful" << endl;
+        }
+
+        for(int i=0;i<NTHREADS;i++) pthread_join(threads[i],NULL);
+        
+        for(int i = 0; i < NTHREADS; i++ ) {
+        cout << "Thread " << i << " has as the value for the integral" << endl;
+        cout << "Integral = ";
+        cout << integral_value[i][0] << " +- "; 
+        cout << integral_value[i][1] << endl;
+        }
+        
+    }
+    
+
+    
+    
     
 }
 
-#define NTHREADS 4
+
 
 int main(void)
 {
   
    cout.precision(16);
-   bool execute_single_core = true;
-   bool execute_multi_core = true;
-   bool execute_multi_core_2 = true;
-   bool execute_multi_core_3 = false;
+   bool execute_single_core = false;
+   bool execute_multi_core = false;
+   bool execute_multi_core_2 = false;
+   bool execute_multi_core_3 = true;
    
    ///////////////////////////////////////////////////////////////////////////
    ///
@@ -141,9 +214,11 @@ int main(void)
     double integral_value0[2] = {0,0};
     IntegratorArguments IntArg0;
     IntArg0.Integrand = funct;
-    IntArg0.NumberOfVariables = 2;
-    IntArg0.VerboseLevel = 0;
-    IntArg0.Seed = 1;
+    IntArg0.IntegrandEvaluations = 10000000;
+    IntArg0.SizeofBatches = 500000;
+    IntArg0.NumberOfVariables = 1;
+    IntArg0.VerboseLevel = 2;
+    IntArg0.Seed = 5;
    
     IntArg0.Integral = integral_value0;
     int t = time(NULL);
@@ -183,6 +258,8 @@ int main(void)
         integral_value[i][0]=0;
         integral_value[i][1]=0;
         IntArgs[i].Integrand = funct;
+        IntArgs[i].IntegrandEvaluations = 10000000;
+        IntArgs[i].SizeofBatches = 50000;
         IntArgs[i].NumberOfVariables = 2;
         IntArgs[i].VerboseLevel = 0;
         IntArgs[i].Seed = i;
@@ -235,7 +312,9 @@ int main(void)
         integral_value[i][0]=0;
         integral_value[i][1]=0;
         IntArgs[i].Integrand = funct;
-        IntArgs[i].NumberOfVariables = 2;
+        IntArgs[i].IntegrandEvaluations = 100000000;
+        IntArgs[i].SizeofBatches = 5000;
+        IntArgs[i].NumberOfVariables = 1;
         IntArgs[i].VerboseLevel = 0;
         IntArgs[i].Seed = i;
         IntArgs[i].Integral = integral_value[i];        
@@ -282,74 +361,19 @@ int main(void)
     
     if(execute_multi_core_3){
         
-    cout << "Manual Thread creation and core commitment" <<endl;
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
+    pthread_t thr0;
+    double integral_value0[2] = {0,0};
+    IntegratorArguments IntArg0;
+    IntArg0.Integrand = funct;
+    IntArg0.IntegrandEvaluations = 1000000;
+    IntArg0.SizeofBatches = 500000;
+    IntArg0.NumberOfVariables = 1;
+    IntArg0.VerboseLevel = 0;
+    IntArg0.Seed = 5;
+   
+    MultithreadIntegrate(IntArg0);
     
-    pthread_t thr1,thr2;
-    double integral_value1[2] = {0,0};
-    double integral_value2[2] = {0,0};
-    IntegratorArguments IntArgs1,IntArgs2;
-    int rc1,rc2;
     
-    IntArgs1.Integrand = funct;
-    IntArgs2.Integrand = funct;
-    IntArgs1.NumberOfVariables = 2;
-    IntArgs2.NumberOfVariables = 2;
-    IntArgs1.VerboseLevel = 0;
-    IntArgs2.VerboseLevel = 0;
-    IntArgs1.Seed = 1;
-    IntArgs2.Seed = 2;
-    IntArgs1.Integral = integral_value1;        
-    IntArgs2.Integral = integral_value2;        
-        
-    int t = time(NULL);
-    
-    cout << "Now Attempting to create thread "<<1<<endl;
-    rc1 = pthread_create(&thr1, NULL, ThreadIntegrate,&IntArgs1);
-    if (rc1) {
-        cout << "Error:unable to create thread," << rc1 << endl;
-        exit(-1);
-    }
-    else cout << "Thread "<<1<<" has been succesfuly created" << endl;
-    CPU_SET(1, &cpuset);
-    
-    cout << "Now Attempting to create thread "<<2<<endl;
-    rc2 = pthread_create(&thr2, NULL, ThreadIntegrate,&IntArgs2);
-    if (rc2) {
-        cout << "Error:unable to create thread," << rc2 << endl;
-        exit(-1);
-    }
-    else cout << "Thread "<<2<<" has been succesfuly created" << endl;
-    CPU_SET(2, &cpuset);
-    
-    cout << "Now attempting to commit different threads to different cores" << endl;
-    
-    const int set_result1 = pthread_setaffinity_np(thr1, sizeof(cpu_set_t), &cpuset);
-    if(set_result1) cout << "Error: Thread "<<1<<" could not be commited to a new core"<<endl;
-    else cout << "Thread reassignment succesful" << endl;
-    
-    const int set_result2 = pthread_setaffinity_np(thr2, sizeof(cpu_set_t), &cpuset);
-    if(set_result2) cout << "Error: Thread "<<2<<" could not be commited to a new core"<<endl;
-    else cout << "Thread reassignment succesful" << endl;
-    
-    /// Thread Waiting Phase ///
-    pthread_join(thr1,NULL);
-    pthread_join(thr2,NULL);
-    cout << "All threads have now finished" <<endl;
-    cout << "This took " << time(NULL)-t << " secs to finish" <<endl;
-    
-    cout << "Or " << (time(NULL)-t)/NTHREADS << " secs per core" <<endl;
-    cout << "Thread " << 1 << " has as the value for the integral" << endl;
-    cout << "Integral = ";
-    cout << integral_value1[0] << " +- "; 
-    cout << integral_value1[1] << endl;
-    
-    cout << "Thread " << 2 << " has as the value for the integral" << endl;
-    cout << "Integral = ";
-    cout << integral_value2[0] << " +- "; 
-    cout << integral_value2[1] << endl;
-      
     }
     
     
