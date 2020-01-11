@@ -7,18 +7,19 @@
 #include <time.h>
 #include <unistd.h>
 #include <random> 
+#include "Mersenne_Twister.h"
 
 using namespace std;
 
 thread_local mt19937 rng(0);
-#define NTHREADS 2
+#define NTHREADS 8
 
 double aleatorio(double a, double b){
     return uniform_real_distribution<double>{a, b}(rng);
 }
 
 double funct(double* a){
-    return log(1.0+a[0]);
+    return pow(a[0],5);
 }
 
 void EstimateBounds(int ndim, double (*f)(double*), double* bounds){
@@ -83,7 +84,7 @@ void Integrate(double (*f)(double*), int ndim, double* integral,
             cout << "The bounds for this iteration were = ["<<bounds[0]<<","<<bounds[1]<<"]"<<endl;}
         cout << "Integral = ";
         cout << integral[0]/k << " +- "; 
-        cout << sqrt((integral[1]/k - pow(integral[0]/k,2))/k) << endl;
+        cout << sqrt((integral[1]/k - pow(integral[0]/k,2))) << endl;
         cout << endl;
             
         }
@@ -91,7 +92,7 @@ void Integrate(double (*f)(double*), int ndim, double* integral,
     }
         
     integral[0] /= niter;
-    integral[1] = sqrt((integral[1]/niter - pow(integral[0],2))/niter);
+    integral[1] = sqrt((integral[1]/niter - pow(integral[0],2)));
     
 }
 
@@ -143,20 +144,22 @@ void MultithreadIntegrate(IntegratorArguments IA){
     for(int i=0;i<NTHREADS;i++){
         IntArgs[i].Integrand = IA.Integrand;
         IntArgs[i].NumberOfVariables = IA.NumberOfVariables;
-        IntArgs[i].SizeofBatches = 10000;
-        IntArgs[i].IntegrandEvaluations = 100*IntArgs[i].SizeofBatches;
+        IntArgs[i].SizeofBatches = IA.SizeofBatches;
+        IntArgs[i].IntegrandEvaluations = IA.IntegrandEvaluations;
         IntArgs[i].VerboseLevel = 0;
-        IntArgs[i].Seed = i;
         IntArgs[i].Integral = integral_value[i];
         CPU_SET(i, &cpuset);
     }
     
-    int NIter = IA.IntegrandEvaluations/(NTHREADS*100);
+    int NIter = IA.IntegrandEvaluations/(NTHREADS*IA.SizeofBatches);
+    IA.Integral[0]=0;
+    IA.Integral[1]=0;
     
-    for(int j=0;j<NIter;j++){
+    for(int j=1;j<=NIter;j++){
         for(int i=0;i<NTHREADS;i++){
             integral_value[i][0]=0;
             integral_value[i][1]=0;
+            IntArgs[i].Seed = i*j;
             if (ver)cout << "Now Attempting to create thread "<<i<<endl;
             rc[i] = pthread_create(&threads[i], NULL, ThreadIntegrate,&IntArgs[i]);
             if (rc[i]) {
@@ -169,20 +172,30 @@ void MultithreadIntegrate(IntegratorArguments IA){
             if(set_result) cout << "Error: Thread "<<i<<" could not be commited to a new core"<<endl;
             else if (ver) cout << "Thread reassignment succesful" << endl;
         }
-
-        for(int i=0;i<NTHREADS;i++) pthread_join(threads[i],NULL);
         
-        for(int i = 0; i < NTHREADS; i++ ) {
-        cout << "Thread " << i << " has as the value for the integral" << endl;
-        cout << "Integral = ";
-        cout << integral_value[i][0] << " +- "; 
-        cout << integral_value[i][1] << endl;
+        for(int i=0;i<NTHREADS;i++){
+            pthread_join(threads[i],NULL);
+            if(ver){
+                cout << "Thread "<<i<<" had the results:" <<endl;
+                cout << "Integral = ";
+                cout << integral_value[i][0] << " +/- ";
+                cout << integral_value[i][1] << endl<<endl;
+            }
+            IA.Integral[0] += integral_value[i][0];
+            IA.Integral[1] += pow(integral_value[i][0],2);
         }
+        
+        cout << "Iteration["<<j<<"]: " << j*NTHREADS*IA.SizeofBatches;
+        cout << " integrand evaluations so far" <<endl;
+        cout << "Integral = ";
+        cout << IA.Integral[0]/(j*NTHREADS) << " +- "; 
+        cout << sqrt(IA.Integral[1]/(NTHREADS*NIter)-pow(IA.Integral[0]/(j*NTHREADS),2)) << endl;
+        cout << endl;
         
     }
     
-
-    
+    IA.Integral[0] /= (NTHREADS*NIter);
+    IA.Integral[1] = sqrt(IA.Integral[1]/(NTHREADS*NIter)-pow(IA.Integral[0],2));
     
     
 }
@@ -196,7 +209,52 @@ int main(void)
    bool execute_single_core = false;
    bool execute_multi_core = false;
    bool execute_multi_core_2 = false;
-   bool execute_multi_core_3 = true;
+   bool execute_multi_core_3 = false;
+   bool execute_mersenne_twister = true;
+   
+   if(execute_mersenne_twister){
+       Mersenne_Twister MT1;
+       bool ver = false;
+       if (ver){
+       cout << "Parameters : " << endl;
+       cout << "w = " << MT1.w << endl;
+       cout << "n = " << MT1.n << endl;
+       cout << "m = " << MT1.m << endl;
+       cout << "r = " << MT1.r << endl;
+       cout << "a = " << MT1.a << endl;
+       cout << "u = " << MT1.u << endl;
+       cout << "d = " << MT1.d << endl;
+       cout << "s = " << MT1.s << endl;
+       cout << "b = " << MT1.b << endl;
+       cout << "t = " << MT1.t << endl;
+       cout << "c = " << MT1.c << endl;
+       cout << "l = " << MT1.l << endl;
+       }
+       MT1.Seed(11231);
+       for(int i=0;i<100000;i++){
+           cout << MT1.Extract() << endl; 
+    }
+          
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+}
    
    ///////////////////////////////////////////////////////////////////////////
    ///
@@ -232,11 +290,12 @@ int main(void)
     else cout << "Thread "<<0<<" has been succesfuly created" << endl;
     pthread_join(thr0,NULL);
     cout << "Thread 0 has finished, it took " << time(NULL)-t <<" secs to finish"  << endl;
-    cout << "Integral Value = "<< integral_value0[0] << "+/-" << integral_value0[1] <<endl;
+    cout << "Integral Value = "<< integral_value0[0] << " +/- " << integral_value0[1] <<endl;
     }
     
     
     ////////////////////////////////////////////////////////////////////////////////
+    ///
     ///             Multiple Threads Creation 
     ///
     ///   This implementation works, however it creates all the cores on the same CPU.
@@ -361,17 +420,22 @@ int main(void)
     
     if(execute_multi_core_3){
         
-    pthread_t thr0;
+        
     double integral_value0[2] = {0,0};
     IntegratorArguments IntArg0;
+    IntArg0.Integral = integral_value0;
     IntArg0.Integrand = funct;
-    IntArg0.IntegrandEvaluations = 1000000;
-    IntArg0.SizeofBatches = 500000;
+    IntArg0.IntegrandEvaluations = 10000000;
+    IntArg0.SizeofBatches = 100000;
     IntArg0.NumberOfVariables = 1;
     IntArg0.VerboseLevel = 0;
     IntArg0.Seed = 5;
    
+    int t = time(NULL);
     MultithreadIntegrate(IntArg0);
+    cout << "Integration has finished, it took " << time(NULL)-t <<" secs to finish"  << endl;
+    cout << "Integral Value = "<< integral_value0[0] << " +/- " << integral_value0[1] <<endl;
+    
     
     
     }
