@@ -10,7 +10,7 @@ SOURCE 	= Test
 OUT 	= Multicore_tests
 
 
-all: compile clean run
+all: compile clean
 
 compile: 
 	$(CPP) $(CFLAGS) $(SOURCE).cpp -o $(OUT)_cpp $(LIBS)
@@ -22,7 +22,7 @@ clean:
 	
 run: 
 	./$(OUT)_cpp > $(OUT)_cpp.txt &
-# 	./$(OUT)_nvd > $(OUT)_nvd.txt &
+	./$(OUT)_nvd > $(OUT)_nvd.txt &
 
 open:
 	@kate $(OUT)_cpp.txt &
