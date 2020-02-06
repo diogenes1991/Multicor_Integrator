@@ -4,13 +4,13 @@ NVD 	= nvcc
 CFLAGS	= -std=c++11 -O3
 LIBS	= -lpthread
 
-NFLAGS = 
+NFLAGS = -I/home/diogenes1991/NVIDIA_CUDA-10.2_Samples/common/inc
 
 SOURCE 	= Test
 OUT 	= Multicore_tests
 
 
-all: compile clean
+all: compile
 
 compile: 
 	$(CPP) $(CFLAGS) $(SOURCE).cpp -o $(OUT)_cpp $(LIBS)
