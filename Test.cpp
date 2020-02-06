@@ -14,7 +14,7 @@ using namespace std;
 thread_local mt19937 rng(0);
 #define NTHREADS 8
 
-double aleatorio(double a, double b){
+double RANDOM(double a, double b){
     return uniform_real_distribution<double>{a, b}(rng);
 }
 
@@ -25,7 +25,7 @@ double funct(double* a){
 void EstimateBounds(int ndim, double (*f)(double*), double* bounds){
     double x[ndim];
     for(int i=1;i<=1000;i++){
-        for(int j=0;j<ndim;j++) x[j] = aleatorio(0,1);
+        for(int j=0;j<ndim;j++) x[j] = RANDOM(0,1);
         double fx = f(x);
         if ( fx > bounds[1]) bounds[1] = fx;
         if ( fx < bounds[0]) bounds[0] = fx;
@@ -57,9 +57,9 @@ void Integrate(double (*f)(double*), int ndim, double* integral,
         int count = 0;
         for (int i=1; i<=batchsize; i++)
         {
-            for(int j=0;j<ndim;j++) x[j] = aleatorio(0,1);
+            for(int j=0;j<ndim;j++) x[j] = RANDOM(0,1);
             double fx = f(x);
-            double y = aleatorio(bounds[0],bounds[1]);
+            double y = RANDOM(bounds[0],bounds[1]);
             if ( fx > loc_max )   loc_max = fx;
             if ( fx < loc_min )   loc_min = fx;
             if ( fx > y && y > 0 ) count++;
@@ -214,7 +214,7 @@ int main(void)
    
    if(execute_mersenne_twister){
        Mersenne_Twister MT1;
-       bool ver = false;
+       bool ver = true;
        if (ver){
        cout << "Parameters : " << endl;
        cout << "w = " << MT1.w << endl;
@@ -230,10 +230,29 @@ int main(void)
        cout << "c = " << MT1.c << endl;
        cout << "l = " << MT1.l << endl;
        }
-       MT1.Seed(11231);
-       for(int i=0;i<100000;i++){
-           cout << MT1.Extract() << endl; 
-    }
+//        MT1.Seed(time(NULL));
+       cout << "MAX BIT DEPTH = " << (1<<(MT1.w-1))-1 << endl;
+       int NI = 1000;
+       double AVG1 = 0;
+       double AVG2 = 0;
+       double AVG3 = 0;
+       double AVG4 = 0;
+       for(int i=0;i<NI;i++){
+           unsigned long int aux = MT1.Extract();
+           AVG1 += MT1.Extract();
+           AVG2 += (MT1.Extract()+MT1.Extract())/2;
+           AVG3 += (MT1.Extract()+MT1.Extract()+MT1.Extract())/3;
+           AVG4 += (MT1.Extract()+MT1.Extract()+MT1.Extract()+MT1.Extract())/4;
+           
+       }
+       AVG1/= NI;
+       AVG2/= NI;
+       AVG3/= NI;
+       AVG4/= NI;
+       cout << "<x^1> = " << AVG1 << endl;
+       cout << "<x^2> = " << AVG2 << endl;
+       cout << "<x^3> = " << AVG3 << endl;
+       cout << "<x^4> = " << AVG4 << endl;
           
        
        
